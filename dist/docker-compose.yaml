@@ -1,0 +1,238 @@
+version: '3'
+services:
+  postgres:
+    image: postgres:12
+    container_name: postgres_db
+    restart: always
+    environment:
+      - POSTGRES_USER=adminpostgres
+      - POSTGRES_PASSWORD=87654321
+      - POSTGRES_DB=jojonomic_db
+    ports:
+      - '5432:5432'
+    volumes: 
+      - ./postgre/init.sql:/docker-entrypoint-initdb.d/init.sql
+      - ./postgre/postgres:/var/lib/postgresql/data
+    networks:
+      - default-network
+  zookeeper:
+    image: confluentinc/cp-zookeeper:5.2.4
+    container_name: zookeeper
+    ports:
+      - 2181:2181
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+    networks:
+      - default-network
+  kafka:
+    image: confluentinc/cp-kafka:5.3.1
+    container_name: kafka
+    ports:
+      - 9093:9093
+      - 29092:29092
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:29092,PLAINTEXT_HOST://localhost:9093
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      JMX_PORT: 9998
+      KAFKA_JMX_OPTS: -Dcom.sun.management.jmxremote -Dcom.sun.management.jmxremote.authenticate=false -Dcom.sun.management.jmxremote.ssl=false -Djava.rmi.server.hostname=kafka1 -Dcom.sun.management.jmxremote.rmi.port=9998
+    depends_on:
+      - zookeeper 
+    networks:
+      - default-network
+  kafka-ui:
+    image: provectuslabs/kafka-ui
+    container_name: kafka-ui
+    ports:
+      - "8080:8080"
+    restart: always
+    environment:
+      KAFKA_CLUSTERS_0_NAME: local
+      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:29092
+      KAFKA_CLUSTERS_0_ZOOKEEPER: zookeeper:2181 
+    depends_on:
+      - zookeeper  
+      - kafka
+    networks:
+      - default-network
+  buyback-service:
+    build: 
+      context: ../microservice/buyback-service
+      dockerfile: Dockerfile
+    ports:
+      - "8004:8004"
+    restart: always
+    environment:
+      APP_HOST: 0.0.0.0
+      APP_PORT: 8004
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_USER: adminpostgres
+      DB_PASS: 87654321
+      DB_NAME: jojonomic_db
+      KAFKA_URL: kafka:29092
+      KAFKA_TOPIC: buyback
+    depends_on:
+      - zookeeper  
+      - kafka
+    networks:
+      - default-network
+  buyback-storage:
+    build: 
+      context: ../microservice/buyback-storage
+      dockerfile: Dockerfile
+    environment:
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_USER: adminpostgres
+      DB_PASS: 87654321
+      DB_NAME: jojonomic_db
+      KAFKA_URL: kafka:29092
+      KAFKA_TOPIC: buyback
+      KAFKA_GROUP_ID: buyback_storage
+    restart: always
+    depends_on:
+      - buyback-service
+    networks:
+      - default-network
+  cek-harga-service:
+    build: 
+      context: ../microservice/cek-harga-service
+      dockerfile: Dockerfile
+    ports:
+      - "8001:8001"
+    restart: always
+    environment:
+      APP_HOST: 0.0.0.0
+      APP_PORT: 8001
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_USER: adminpostgres
+      DB_PASS: 87654321
+      DB_NAME: jojonomic_db
+    depends_on:
+      - zookeeper  
+      - kafka
+    networks:
+      - default-network
+  cek-mutasi-service:
+    build: 
+      context: ../microservice/cek-mutasi-service
+      dockerfile: Dockerfile
+    ports:
+      - "8002:8002"
+    restart: always
+    environment:
+      APP_HOST: 0.0.0.0
+      APP_PORT: 8002
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_USER: adminpostgres
+      DB_PASS: 87654321
+      DB_NAME: jojonomic_db
+    depends_on:
+      - zookeeper  
+      - kafka
+    networks:
+      - default-network
+  cek-saldo-service:
+    build: 
+      context: ../microservice/cek-saldo-service
+      dockerfile: Dockerfile
+    ports:
+      - "8003:8003"
+    restart: always
+    environment:
+      APP_HOST: 0.0.0.0
+      APP_PORT: 8003
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_USER: adminpostgres
+      DB_PASS: 87654321
+      DB_NAME: jojonomic_db
+    depends_on:
+      - zookeeper  
+      - kafka
+    networks:
+      - default-network
+  input-harga-service:
+    build: 
+      context: ../microservice/input-harga-service
+      dockerfile: Dockerfile
+    ports:
+      - "8000:8000"
+    restart: always
+    environment:
+      APP_HOST: 0.0.0.0
+      APP_PORT: 8000
+      KAFKA_URL: kafka:29092
+      KAFKA_TOPIC: input-harga
+    depends_on:
+      - zookeeper  
+      - kafka
+    networks:
+      - default-network
+  input-harga-storage:
+    build: 
+      context: ../microservice/input-harga-storage
+      dockerfile: Dockerfile
+    environment:
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_USER: adminpostgres
+      DB_PASS: 87654321
+      DB_NAME: jojonomic_db
+      KAFKA_URL: kafka:29092
+      KAFKA_TOPIC: input-harga
+      KAFKA_GROUP_ID: input_storage
+    restart: always
+    depends_on:
+      - input-harga-service
+    networks:
+      - default-network
+  topup-service:
+    build: 
+      context: ../microservice/topup-service
+      dockerfile: Dockerfile
+    ports:
+      - "8005:8005"
+    restart: always
+    environment:
+      APP_HOST: 0.0.0.0
+      APP_PORT: 8005
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_USER: adminpostgres
+      DB_PASS: 87654321
+      DB_NAME: jojonomic_db
+      KAFKA_URL: kafka:29092
+      KAFKA_TOPIC: topup
+    depends_on:
+      - zookeeper  
+      - kafka
+    networks:
+      - default-network
+  topup-storage:
+    build: 
+      context: ../microservice/topup-storage
+      dockerfile: Dockerfile
+    environment:
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_USER: adminpostgres
+      DB_PASS: 87654321
+      DB_NAME: jojonomic_db
+      KAFKA_URL: kafka:29092
+      KAFKA_TOPIC: topup
+      KAFKA_GROUP_ID: topup_storage
+    restart: always
+    depends_on:
+      - topup-service
+    networks:
+      - default-network
+networks:
+  default-network:
