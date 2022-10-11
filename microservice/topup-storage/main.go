@@ -1,18 +1,16 @@
 package main
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 	"log"
 	"os"
-	"strings"
 	"time"
 
 	"jojonomic/microservice/topup-storage/models"
 
+	"github.com/confluentinc/confluent-kafka-go/kafka"
 	"github.com/joho/godotenv"
-	"github.com/segmentio/kafka-go"
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
 )
@@ -33,22 +31,26 @@ func main() {
 		log.Fatal("Error connect to database")
 	}
 
-	r := getKafkaReader(os.Getenv("KAFKA_URL"), os.Getenv("KAFKA_TOPIC"), os.Getenv("KAFKA_GROUP_ID"))
-	ctx := context.Background()
+	r := getKafkaReader(os.Getenv("KAFKA_URL"), os.Getenv("KAFKA_GROUP_ID"))
+	log.Println("topic", os.Getenv("KAFKA_TOPIC"))
+	if err := r.SubscribeTopics([]string{os.Getenv("KAFKA_TOPIC")}, nil); err != nil {
+		log.Println("error subscribe", err)
+	}
 	for {
-		m, err := r.FetchMessage(ctx)
-		if err != nil {
-			log.Println("fetch message error :", err)
-			break
-		}
-		log.Printf("fetch message topic:%v/partition:%v/offset:%v key: %s\n", m.Topic, m.Partition, m.Offset, string(m.Key))
-		if err := SaveData(db, m.Value); err != nil {
-			log.Println(err.Error())
-			continue
-		}
 
-		if err := r.CommitMessages(ctx, m); err != nil {
-			log.Fatal("commit message error:", err)
+		msg, err := r.ReadMessage(-1)
+		if err == nil {
+			fmt.Printf("Message on %s: %s\n", msg.TopicPartition, string(msg.Value))
+			log.Printf("fetch message topic:%v/partition:%v/offset:%v key: %s\n", msg.TopicPartition.Topic, msg.TopicPartition.Partition, msg.TopicPartition.Offset, string(msg.Key))
+			if err := SaveData(db, msg.Value); err != nil {
+				log.Println(msg.Value)
+				log.Println(err.Error())
+				continue
+			}
+		} else {
+			// The client will automatically try to recover from all errors.
+			fmt.Printf("Consumer error: %v (%v)\n", err, msg)
+			break
 		}
 	}
 }
@@ -86,13 +88,15 @@ func SaveData(db *gorm.DB, data []byte) error {
 	return conn.Commit().Error
 }
 
-func getKafkaReader(kafkaURL, topic, groupID string) *kafka.Reader {
-	brokers := strings.Split(kafkaURL, ",")
-	return kafka.NewReader(kafka.ReaderConfig{
-		Brokers:  brokers,
-		GroupID:  groupID,
-		Topic:    topic,
-		MinBytes: 1e3,
-		MaxBytes: 10e6,
+func getKafkaReader(kafkaURL, groupID string) *kafka.Consumer {
+	c, err := kafka.NewConsumer(&kafka.ConfigMap{
+		"bootstrap.servers": kafkaURL,
+		"group.id":          groupID,
+		"auto.offset.reset": "earliest",
 	})
+
+	if err != nil {
+		panic(err)
+	}
+	return c
 }

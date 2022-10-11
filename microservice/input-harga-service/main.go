@@ -1,7 +1,6 @@
 package main
 
 import (
-	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -12,9 +11,9 @@ import (
 
 	"jojonomic/microservice/input-harga-service/models"
 
+	"github.com/confluentinc/confluent-kafka-go/kafka"
 	"github.com/gorilla/mux"
 	"github.com/joho/godotenv"
-	"github.com/segmentio/kafka-go"
 	"github.com/teris-io/shortid"
 )
 
@@ -24,7 +23,11 @@ func main() {
 		log.Print("Error read environemt file ", err)
 	}
 
-	kafkaConnection := createKafkaConnection(os.Getenv("KAFKA_URL"), os.Getenv("KAFKA_TOPIC"))
+	kafkaConnection, err := kafka.NewProducer(&kafka.ConfigMap{"bootstrap.servers": os.Getenv("KAFKA_URL"), "acks": "all"})
+	if err != nil {
+		fmt.Printf("Failed to create producer: %s", err)
+		os.Exit(1)
+	}
 	defer kafkaConnection.Close()
 
 	r := mux.NewRouter()
@@ -41,7 +44,7 @@ func main() {
 	log.Fatal(srv.ListenAndServe())
 }
 
-func HandleInputHarga(kafkaConnection *kafka.Conn) func(w http.ResponseWriter, r *http.Request) {
+func HandleInputHarga(kafkaConnection *kafka.Producer) func(w http.ResponseWriter, r *http.Request) {
 	return func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		var req models.Request
@@ -100,12 +103,28 @@ func HandleInputHarga(kafkaConnection *kafka.Conn) func(w http.ResponseWriter, r
 			return
 		}
 
-		kafkaConnection.SetWriteDeadline(time.Now().Add(10 * time.Second))
+		go func() {
+			for e := range kafkaConnection.Events() {
+				switch ev := e.(type) {
+				case *kafka.Message:
+					if ev.TopicPartition.Error != nil {
+						fmt.Printf("Failed to deliver message: %v\n", ev.TopicPartition)
+					} else {
+						fmt.Printf("Produced event to topic %s: key = %-10s value = %s\n",
+							*ev.TopicPartition.Topic, string(ev.Key), string(ev.Value))
+					}
+				}
+			}
+		}()
+
+		topic := os.Getenv("KAFKA_TOPIC")
+
 		msg := kafka.Message{
-			Key:   []byte(fmt.Sprintf("address-%s", r.RemoteAddr)),
-			Value: payloadBytes,
+			TopicPartition: kafka.TopicPartition{Topic: &topic, Partition: kafka.PartitionAny},
+			Key:            []byte(fmt.Sprintf("address-%s", r.RemoteAddr)),
+			Value:          payloadBytes,
 		}
-		_, err = kafkaConnection.WriteMessages(msg)
+		err = kafkaConnection.Produce(&msg, nil)
 		if err != nil {
 			w.WriteHeader(http.StatusInternalServerError)
 			json.NewEncoder(w).Encode(models.Response{
@@ -121,13 +140,4 @@ func HandleInputHarga(kafkaConnection *kafka.Conn) func(w http.ResponseWriter, r
 			ReffId: reffId,
 		})
 	}
-}
-
-func createKafkaConnection(kafkaURL, topic string) *kafka.Conn {
-	conn, err := kafka.DialLeader(context.Background(), "tcp", kafkaURL, topic, 0)
-	if err != nil {
-		log.Fatal(err.Error())
-	}
-
-	return conn
 }
